@@ -14,28 +14,19 @@ class Hamming74:
         self.k = k
         self._check_valid_parameters(n, k)
         self.m = n - k
-        
+
         self.H, self.P = self._build_H()
-        print(self.H,self.H.shape)
+        print(self.H,self.H.shape,"\n")
     
         self.G = self._build_G()
         print(self.G,self.G.shape)
 
         self._check_valid_G_H()
 
-        # Syndrome to error position map
-        # The syndrome is H * r^T. The result corresponds to a column in H.
-        # We map the binary string of the syndrome to the 0-based index of the error.
-        # Note: This mapping depends on the column order in H.
-        self.syndrome_map = {
-            (1, 0, 0): 0,
-            (0, 1, 0): 1,
-            (0, 0, 1): 2,
-            (1, 1, 0): 3,
-            (0, 1, 1): 4,
-            (1, 1, 1): 5,
-            (1, 0, 1): 6,
-        }
+        self.syndrome_map = self._build_syndrome_map()
+        print(self.syndrome_map,"\n")
+        self.data_length = 0
+
 
     def _check_valid_parameters(self, n, k):
         assert n > k, "n debe ser mayor a k"
@@ -48,7 +39,7 @@ class Hamming74:
         product = np.dot(self.G, self.H.T) % 2
         assert np.all(product == 0), "G * H^T is not zero matrix"
 
-    def get_non_zero_vectors(self, I_m: np.ndarray):
+    def _get_non_zero_vectors(self, I_m: np.ndarray):
         """
         Genera todos los vectores columna binarios de longitud m, excepto el vector cero y los pertenecientes a la matriz identidad de tamaño m.
         
@@ -81,7 +72,7 @@ class Hamming74:
         P (np.ndarray): Matriz de paridad de tamaño kxm.
         """
         I_m = np.eye(self.m, dtype=int)
-        parity_matrix = self.get_non_zero_vectors(I_m)
+        parity_matrix = self._get_non_zero_vectors(I_m)
         H = np.hstack((parity_matrix.T,I_m))
         return H,parity_matrix
 
@@ -92,23 +83,54 @@ class Hamming74:
         G (np.ndarray): Matriz generadora de tamaño kxn."""
         return np.hstack((np.eye(self.k, dtype=int), self.P))
 
-    def encode(self, data_bits):
+    def _build_syndrome_map(self):
         """
-        Encodes a list/array of bits. Length must be a multiple of 4.
+        Construye el mapa de síndromes a posiciones de error.
+        Retorna:
+        syndrome_map (dict): Mapa de síndromes a posiciones de error.
+        """
+        syndrome_map = {}
+        for col in range(self.n):
+            syndrome = tuple(self.H[:, col])
+            syndrome_map[syndrome] = col
+        return syndrome_map
+    
+    def _apply_padding(self, data_bits):
+        """
+        Aplica padding a los bits de datos para que su longitud sea múltiplo de k.
+        Parametros:
+        data_bits (list or np.ndarray): Lista o array de bits de datos (0s y 1s).
+        Retorna:
+        padded_data (np.ndarray): Bits de datos con padding aplicado.
         """
         data = np.array(data_bits)
-        if len(data) % 4 != 0:
-            raise ValueError("Data length must be a multiple of 4")
+        remainder = len(data) % self.k
+        if remainder != 0:
+            padding_length = self.k - remainder
+            padding = np.zeros(padding_length, dtype=int)
+            padded_data = np.concatenate((data, padding))
+            return padded_data
+        return data
+    
+    def encode(self, data_bits):
+        """
+        Codifica un array de strings binarios que representan bits de datos.
+        Cálcula c = d * G 
 
-        n_blocks = len(data) // 4
+        Parametros:
+        data_bits (list or np.ndarray): Lista o array de bits de datos (0s y 1s).
+        """
+        self.data_length = len(data_bits)
+        data = self._apply_padding(data_bits)
+
+        n_blocks = len(data) // self.k
         encoded_bits = []
 
         for i in range(n_blocks):
-            block = data[i * 4 : (i + 1) * 4]
+            block = data[i * self.k : (i + 1) * self.k]
             # Matrix multiplication modulo 2
             encoded_block = np.dot(block, self.G) % 2
             encoded_bits.extend(encoded_block)
-
         return np.array(encoded_bits, dtype=int)
 
     def decode(self, received_bits):
@@ -117,15 +139,15 @@ class Hamming74:
         Returns (decoded_bits, error_count)
         """
         received = np.array(received_bits)
-        if len(received) % 7 != 0:
-            raise ValueError("Received data length must be a multiple of 7")
+        if len(received) % self.n != 0:
+            raise ValueError(f"Received data length must be a multiple of {self.n}")
 
-        n_blocks = len(received) // 7
+        n_blocks = len(received) // self.n
         decoded_bits = []
         corrected_errors = 0
 
         for i in range(n_blocks):
-            block = received[i * 7 : (i + 1) * 7]
+            block = received[i * self.n : (i + 1) * self.n]
 
             # Calculate syndrome: z = H * r^T
             syndrome = np.dot(self.H, block) % 2
@@ -139,30 +161,8 @@ class Hamming74:
                     block[error_pos] = 1 - block[error_pos]
                     corrected_errors += 1
 
-            # Extract data bits.
-            # Based on G, the data bits are at indices 0, 1, 2, 3?
-            # Let's check G structure.
-            # G = [P | I_4] is standard systematic, but my G is not in that form.
-            # My G rows are:
-            # d1 -> 1101000
-            # d2 -> 0110100
-            # d3 -> 1110010
-            # d4 -> 1010001
-            # This G is not systematic (identity matrix is not clearly visible as a subblock).
-            # Wait, actually looking at G:
-            # Cols 3, 4, 5, 6 (0-indexed) seem to form identity?
-            # Col 3: 1,0,0,0 (from d1) -> No
-            # Let's look at the columns of G:
-            # Col 0: 1,0,1,1
-            # Col 1: 1,1,1,0
-            # Col 2: 0,1,1,1
-            # Col 3: 1,0,0,0 -> d1
-            # Col 4: 0,1,0,0 -> d2
-            # Col 5: 0,0,1,0 -> d3
-            # Col 6: 0,0,0,1 -> d4
-            # Yes! The data bits are at indices 3, 4, 5, 6.
-
-            decoded_block = block[3:7]
+            decoded_block = block[0:self.k]
             decoded_bits.extend(decoded_block)
-
-        return np.array(decoded_bits, dtype=int), corrected_errors
+        # Deshacer el padding
+        restored_data = decoded_bits[: self.data_length]
+        return np.array(restored_data, dtype=int), corrected_errors
