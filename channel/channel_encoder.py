@@ -2,10 +2,10 @@ import random
 import numpy as np
 
 
-class Hamming74:
+class Hamming:
     """
-    Implementation of Hamming(7,4) code.
-    Encodes 4 bits of data into 7 bits.
+    Implementation of Hamming code.
+    Encodes K bits of data into N bits.
     Can correct 1 bit error.
     """
 
@@ -16,15 +16,12 @@ class Hamming74:
         self.m = n - k
 
         self.H, self.P = self._build_H()
-        print(self.H,self.H.shape,"\n")
     
         self.G = self._build_G()
-        print(self.G,self.G.shape)
 
         self._check_valid_G_H()
 
         self.syndrome_map = self._build_syndrome_map()
-        print(self.syndrome_map,"\n")
         self.data_length = 0
 
 
@@ -135,8 +132,14 @@ class Hamming74:
 
     def decode(self, received_bits):
         """
-        Decodes a list/array of bits. Length must be a multiple of 7.
-        Returns (decoded_bits, error_count)
+        Descodifica y corrige un array de strings binarios que representan bits recibidos.
+        Cálcula el síndrome z = H * r^T y corrige errores si es necesario.
+
+        Parametros:
+        received_bits (list or np.ndarray): Lista o array de bits recibidos (0s y 1s).
+        Retorna:
+        decoded_bits (np.ndarray): Bits decodificados y corregidos.
+        corrected_errors (int): Número de errores corregidos.
         """
         received = np.array(received_bits)
         if len(received) % self.n != 0:

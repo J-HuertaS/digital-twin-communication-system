@@ -1,5 +1,5 @@
 import numpy as np
-from channel_encoder import Hamming74
+from channel_encoder import Hamming
 from bsc import BinarySymmetricChannel
 
 def generate_random_data(num_bits):
@@ -16,7 +16,7 @@ def run_simulation():
     )
 
     # Configuración
-    NUM_DATA_BITS = 20  # Múltiplo de 4 para Hamming(7,4)
+    NUM_DATA_BITS = 20  # Múltiplo de 4 para Hamming
     ERROR_PROBABILITY = 0.1  # 10% de probabilidad de error por bit
 
     print(
@@ -29,9 +29,9 @@ def run_simulation():
     print(f"1. Datos de la Fuente (Original): \n   {bits_to_string(source_data)}")
 
     # 2. Codificación de Canal
-    hamming = Hamming74()
+    hamming = Hamming()
     encoded_data = hamming.encode(source_data)
-    print(f"\n2. Datos Codificados (Hamming 7,4): \n   {bits_to_string(encoded_data)}")
+    print(f"\n2. Datos Codificados (Hamming): \n   {bits_to_string(encoded_data)}")
     print(
         f"   (Longitud original: {len(source_data)} -> Longitud codificada: {len(encoded_data)})"
     )
