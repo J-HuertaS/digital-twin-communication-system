@@ -9,21 +9,19 @@ class Hamming74:
     Can correct 1 bit error.
     """
 
-    def __init__(self):
-        # Generator matrix G (4x7)
-        self.G = np.array(
-            [
-                [1, 1, 0, 1, 0, 0, 0],
-                [0, 1, 1, 0, 1, 0, 0],
-                [1, 1, 1, 0, 0, 1, 0],
-                [1, 0, 1, 0, 0, 0, 1],
-            ]
-        )
+    def __init__(self, k: int = 4, n: int = 7):
+        self.n = n
+        self.k = k
+        self._check_valid_parameters(n, k)
+        self.m = n - k
+        
+        self.H, self.P = self._build_H()
+        print(self.H,self.H.shape)
+    
+        self.G = self._build_G()
+        print(self.G,self.G.shape)
 
-        # Parity check matrix H (3x7)
-        self.H = np.array(
-            [[1, 0, 0, 1, 0, 1, 1], [0, 1, 0, 1, 1, 1, 0], [0, 0, 1, 0, 1, 1, 1]]
-        )
+        self._check_valid_G_H()
 
         # Syndrome to error position map
         # The syndrome is H * r^T. The result corresponds to a column in H.
@@ -38,6 +36,61 @@ class Hamming74:
             (1, 1, 1): 5,
             (1, 0, 1): 6,
         }
+
+    def _check_valid_parameters(self, n, k):
+        assert n > k, "n debe ser mayor a k"
+
+    def _check_valid_G_H(self):
+        """"
+        Verifica que las matrices G y H sean válidas para el código Hamming(n,k).
+        """
+        # Verificar G * H^T = 0
+        product = np.dot(self.G, self.H.T) % 2
+        assert np.all(product == 0), "G * H^T is not zero matrix"
+
+    def get_non_zero_vectors(self, I_m: np.ndarray):
+        """
+        Genera todos los vectores columna binarios de longitud m, excepto el vector cero y los pertenecientes a la matriz identidad de tamaño m.
+        
+        Parametros:
+        I_m (np.ndarray): Matriz identidad de tamaño m x m.
+
+        Retorna:
+        all_vectors: Lista de vectores columna binarios de longitud m.
+        """
+        all_vectors = []
+        # Iterar desde 1 hasta 2^m - 1
+        for i in range(1, 2**self.m):
+            # Convertir el número (i) a su representación binaria de m bits
+            vector = []
+            temp = i
+            for _ in range(self.m):
+                # Obtener el bit menos significativo
+                vector.insert(0, temp % 2)
+                temp //= 2
+            if not vector in I_m.tolist():
+                all_vectors.append(vector)
+        # Retorna una lista de listas (vectores)
+        return np.array(all_vectors)
+
+    def _build_H(self):
+        """
+        Construye la matriz de paridad H para el código Hamming(n,k).
+         Retorna:
+        H (np.ndarray): Matriz de paridad de tamaño mxn.
+        P (np.ndarray): Matriz de paridad de tamaño kxm.
+        """
+        I_m = np.eye(self.m, dtype=int)
+        parity_matrix = self.get_non_zero_vectors(I_m)
+        H = np.hstack((parity_matrix.T,I_m))
+        return H,parity_matrix
+
+    def _build_G(self):
+        """"
+        Construye la matriz generadora G para el código Hamming(n,k).
+        Retorna:
+        G (np.ndarray): Matriz generadora de tamaño kxn."""
+        return np.hstack((np.eye(self.k, dtype=int), self.P))
 
     def encode(self, data_bits):
         """
@@ -113,6 +166,3 @@ class Hamming74:
             decoded_bits.extend(decoded_block)
 
         return np.array(decoded_bits, dtype=int), corrected_errors
-
-
-
