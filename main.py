@@ -10,7 +10,7 @@ from visualizador import LiveScope
 def launch_ui():
     root = tk.Tk()
     emit_q = Emisor.get_emit_queue()
-    recv_q = Receptor.get_recv_queue()  # asegúrate de haberlo agregado en Receptor
+    recv_q = Receptor.get_recv_queue()
     LiveScope(root, emit_q, recv_q, fs=50.0)
     root.mainloop()
 
@@ -25,7 +25,7 @@ async def run_all():
     # Espera corta para que el server quede arriba
     await asyncio.sleep(0.4)
 
-    # Cliente receptor (esto activa handle_connection)
+    # Cliente receptor
     recv_task = asyncio.create_task(Receptor.receive_message())
 
     await asyncio.gather(server_task, recv_task)

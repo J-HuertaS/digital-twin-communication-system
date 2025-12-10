@@ -5,43 +5,82 @@ import random
 import numpy as np
 import websockets
 import serial
+from queue import Queue
 
 from Codificacion_Hamming import Hamming
 from Codificacion_Huffman import train_codebook
 from Codificacion_Huffman import encode as huf_encode
-from Codificacion_Huffman import bits_to_bytes, bytes_to_bits
+from Codificacion_Huffman import bits_to_bytes, bytes_to_bits  # No se usan, pero se mantienen
 from Filtrado import apply_moving_average_filter, adc_to_voltage, voltage_to_adc, calculate_entropy
-from queue import Queue
 
+
+# =========================================================
+# COLAS Y ESTADO COMPARTIDO PARA UI
+# =========================================================
 EMIT_Q = Queue(maxsize=50)
 
 def get_emit_queue():
     return EMIT_Q
 
-# Configuración de Logging
+# Slider 1: nivel del "sensor" (ADC medio)
+SENSOR_LEVEL = 520  # valor inicial
+def set_sensor_level(v: int):
+    global SENSOR_LEVEL
+    SENSOR_LEVEL = int(v)
+
+def get_sensor_level() -> int:
+    return int(SENSOR_LEVEL)
+
+# Slider 2: BER del canal
+CHANNEL_BER = 0.00  # valor inicial
+def set_channel_ber(v: float):
+    global CHANNEL_BER
+    CHANNEL_BER = float(v)
+
+def get_channel_ber() -> float:
+    return float(CHANNEL_BER)
+
+
+# =========================================================
+# CONFIGURACIÓN
+# =========================================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Configuración de E/S y Procesamiento
-USE_ARDUINO = False        # ← CAMBIAR ESTO A True PARA LEER DEL ARDUINO
+USE_ARDUINO = False       # ← True si usan Arduino real
 ARDUINO_PORT = "COM3"
 ARDUINO_BAUD = 9600
 
 WINDOW = 5
 BLOCK_SIZE = 100
 
+HOST = "localhost"
+PORT = 8766  # 👈 IMPORTANTE: mismo puerto que tu Receptor
 
+
+# =========================================================
+# CANAL RUIDOSO (BER)
+# =========================================================
+def apply_ber(bits, ber):
+    if ber <= 0:
+        return bits
+    noisy = []
+    for b in bits:
+        if random.random() < ber:
+            noisy.append(1 - b)
+        else:
+            noisy.append(b)
+    return noisy
+
+
+# =========================================================
+# HANDLER WEBSOCKET (EMISOR)
+# =========================================================
 async def handle_connection(websocket):
     logging.info("Cliente conectado al EMISOR")
 
-    # Inicialización de Hamming
-    # Se inicializa Hamming(7,4) por defecto
-    hamming = Hamming(k=4, n=7) 
+    hamming = Hamming(k=4, n=7)
     buffer = []
-    
-    # El diccionario de Huffman puede cambiar en cada bloque, 
-    # por eso no se pre-calcula.
 
-    # Abrir puerto serial solo si el usuario lo pidió
     arduino = None
     if USE_ARDUINO:
         try:
@@ -54,10 +93,10 @@ async def handle_connection(websocket):
     try:
         while True:
             # ------------------------------
-            # LECTURA SEGÚN MODO SELECCIONADO
+            # LECTURA SEGÚN MODO
             # ------------------------------
-
             value = None
+
             if USE_ARDUINO and arduino:
                 if arduino.in_waiting > 0:
                     raw = arduino.readline().decode('utf-8').strip()
@@ -67,17 +106,18 @@ async def handle_connection(websocket):
                     await asyncio.sleep(0.001)
                     continue
             else:
-                # Datos simulados
-                await asyncio.sleep(1 / 200)
+                # 🔥 Sensor simulado controlado por SLIDER
+                await asyncio.sleep(1 / 50)
+
                 t = getattr(handle_connection, "_t", 0)
                 handle_connection._t = t + 1
 
-                base = 520
+                base = get_sensor_level()          # 👈 desde slider
                 slow = 90 * np.sin(2 * np.pi * 0.02 * t)
                 noise = np.random.normal(0, 8)
-                value = int(np.clip(base + slow + noise, 0, 3000))
 
-            
+                value = int(np.clip(base + slow + noise, 0, 1023))
+
             if value is None:
                 continue
 
@@ -86,118 +126,91 @@ async def handle_connection(websocket):
             if len(buffer) < BLOCK_SIZE:
                 continue
 
-            # Procesar bloque
+            # ------------------------------
+            # PROCESAR BLOQUE
+            # ------------------------------
             block = np.array(buffer[:BLOCK_SIZE])
             buffer = buffer[BLOCK_SIZE:]
 
-            logging.info(f"Bloque de datos sin procesar: {block.tolist()}")
-
-            # ------------------------------
-            # FILTRADO Y PROCESAMIENTO
-            # ------------------------------
-            
-            # Calcular la entropía antes de filtrar (opcional, pero puede ser útil)
             entropy = calculate_entropy(block)
-            logging.info(f"Entropía del bloque (crudo): {entropy}")
 
-            # 1. Aplicar filtro de promedio móvil (en dominio de voltaje)
+            # 1) ADC -> Voltaje
             volt = adc_to_voltage(block)
+
+            # 2) Filtro promedio móvil
             filtered = apply_moving_average_filter(volt, WINDOW)
-            
-            # 2. Convertir de nuevo a valores ADC discretos (que son los símbolos)
+
+            # 3) Voltaje -> ADC (símbolos)
             filtered_adc = voltage_to_adc(filtered)
-            
-            # El filtro de promedio móvil reduce la longitud del array
-            # mode='valid' resulta en len(data) - window + 1
-            logging.info(f"Bloque filtrado ADC ({len(filtered_adc)} samples): {filtered_adc.tolist()}")
 
-            # ----------------------------------
+            # ------------------------------
             # REPORTE PARA VISUALIZACIÓN
-            # ----------------------------------
+            # (lo que realmente se transmite)
+            # ------------------------------
             try:
-                # Esta es la señal que realmente se transmite como símbolos
                 emitted_volt = adc_to_voltage(filtered_adc)
-
                 EMIT_Q.put_nowait({
                     "filtered_adc": filtered_adc.tolist(),
-                    "emitted_volt": emitted_volt.tolist()
+                    "emitted_volt": emitted_volt.tolist(),
+                    "entropy": float(entropy),
+                    "ber": get_channel_ber()
                 })
             except Exception:
                 pass
 
             # ------------------------------
-            # CODIFICACIÓN DE HUFFMAN
+            # HUFFMAN
             # ------------------------------
-
-
-            # Los símbolos para Huffman deben ser los valores ADC discretos (enteros)
-            # El script original convertía a str(filtered_adc.tolist()), lo cual
-            # codificaba los caracteres de la representación de la lista, NO los valores ADC.
-            
-            # Usar los valores ADC discretos como fuente de símbolos
-            fuente = filtered_adc.tolist() # Lista de enteros (símbolos)
-            
-            # Entrenar el codebook con los símbolos
+            fuente = filtered_adc.tolist()
             codebook = train_codebook(fuente)
-            
-            # Codificar la secuencia de símbolos en una cadena de bits
             encoded_huffman_bits_str = huf_encode(fuente, codebook)
 
-            logging.info(f"Diccionario de Huffman: {codebook}")
-            logging.info(f"Bits Huffman codificados (longitud {len(encoded_huffman_bits_str)}): {encoded_huffman_bits_str[:]}...")
-
             # ------------------------------
-            # CODIFICACIÓN DE HAMMING
+            # HAMMING
             # ------------------------------
-
-            # 1. Convertir la cadena de bits de Huffman a una lista/array de enteros (0s y 1s)
-            # El script original tenía una doble codificación y un uso de variable incorrecto.
             bits_list = [int(x) for x in encoded_huffman_bits_str]
-            
-            # 2. Codificar con Hamming
-            # hamming.encode espera una lista/array de enteros (0s y 1s)
             hamming_encoded_array = hamming.encode(bits_list)
 
-            logging.info(f"Hamming codificado (longitud {len(hamming_encoded_array)}): {hamming_encoded_array.tolist()[:]}...")
+            # ------------------------------
+            # CANAL RUIDOSO (BER desde slider)
+            # ------------------------------
+            ber = get_channel_ber()
+            hamming_noisy_list = apply_ber(hamming_encoded_array.tolist(), ber)
 
             # ------------------------------
             # ENVÍO
             # ------------------------------
-
             message = {
-                "entropy": entropy,
+                "entropy": float(entropy),
                 "codebook": codebook,
-                # Se envían los bits codificados por Hamming como una lista de enteros
-                "hamming": hamming_encoded_array.tolist(),
-                # Longitud original de los bits Huffman antes del padding de Hamming
-                "huffman_length": len(bits_list)
+                "hamming": hamming_noisy_list,
+                "huffman_length": len(bits_list),
+                "channel_ber": ber
             }
 
             await websocket.send(json.dumps(message))
-            logging.info(f"Mensaje enviado (tamaño {len(json.dumps(message))} bytes)")
 
     except websockets.exceptions.ConnectionClosedOK:
         logging.info("Cliente desconectado del EMISOR (cierre normal)")
     except Exception as e:
         logging.error(f"Error en EMISOR: {e}", exc_info=True)
-
     finally:
         if arduino and arduino.is_open:
             arduino.close()
             logging.info("Puerto Arduino cerrado")
 
 
+# =========================================================
+# MAIN EMISOR (SERVIDOR)
+# =========================================================
 async def main():
     try:
-        async with websockets.serve(
-            handle_connection,
-            "localhost",
-            8766
-        ):
-            logging.info("Servidor EMISOR listo en ws://localhost:8766")
-            await asyncio.Future()  # Mantener vivo
+        async with websockets.serve(handle_connection, HOST, PORT):
+            logging.info(f"Servidor EMISOR listo en ws://{HOST}:{PORT}")
+            await asyncio.Future()
     except Exception as e:
-        logging.error(f"Error al iniciar el servidor: {e}")
+        logging.error(f"Error al iniciar el servidor: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
