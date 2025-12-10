@@ -4,9 +4,7 @@ from typing import Any, Dict, List, Tuple
 
 
 class _Node:
-    '''
-    Nodo interno para el árbol de Huffman.
-    '''
+    # Nodo interno para el árbol de Huffman.
     def __init__(self, symbol=None, freq: int = 0, left=None, right=None):
         self.symbol = symbol
         self.freq = freq
@@ -18,9 +16,6 @@ class _Node:
 
 
 def build_huffman_tree(freqs: Dict[Any, int]) -> _Node:
-    '''
-    Esta me la dio gpt basandose en lo otro pq odio a Huffman y casi que no lo entiendo
-    '''
     heap = [_Node(sym, freq) for sym, freq in freqs.items()]
 
     if len(heap) == 1:
@@ -39,9 +34,7 @@ def build_huffman_tree(freqs: Dict[Any, int]) -> _Node:
 
 
 def build_codebook(root: _Node) -> Dict[Any, str]:
-    '''
-    Genera el diccionario a partir del codebook
-    '''
+    # Genera el diccionario a partir del codebook
     codebook: Dict[Any, str] = {}
 
     def traverse(node: _Node, prefix: str):
@@ -56,13 +49,9 @@ def build_codebook(root: _Node) -> Dict[Any, str]:
     return codebook
 
 
+
 def train_codebook(data: List[Any]) -> Dict[Any, str]:
-    """
-    Entrena un código de Huffman a partir de una lista de símbolos
-    contexto: se lo entrena basandonos en que va a contener el mensaje, entonces abajo en el main
-    hay que cambiar con que se entrena, en este caso es con el mismo mensaje, pero nosotros deberíamos
-    ponerle los simbolos que vamos a recibir tras leer los datos del sensor
-    """
+    # Entrena el codebook de Huffman a partir de la data
     freqs = Counter(data)
     if not freqs:
         raise ValueError("No se puede entrenar Huffman con data vacía.")
@@ -71,10 +60,7 @@ def train_codebook(data: List[Any]) -> Dict[Any, str]:
 
 
 def encode(data: List[Any], codebook: Dict[Any, str]) -> str:
-    """
-    Codifica la secuencia con el codebook de arriba
-    Devuelve lo devuelve en bits
-    """
+    # Codifica la secuencia con el codebook
     try:
         return "".join(codebook[sym] for sym in data)
     except KeyError as e:
@@ -84,10 +70,7 @@ def encode(data: List[Any], codebook: Dict[Any, str]) -> str:
 
 
 def decode(bits: str, codebook: Dict[Any, str]) -> List[Any]:
-    """
-    Decodifica el string de bits usando el codebook con el q se entrenó arriba
-    Devuelve la secuencia  original
-    """
+    # Decodifica la secuencia con el codebook
     rev = {code: sym for sym, code in codebook.items()}
 
     decoded: List[Any] = []
@@ -100,17 +83,13 @@ def decode(bits: str, codebook: Dict[Any, str]) -> List[Any]:
             current = ""
 
     if current:
-        # Basicamente cuando hay bits de sobra significa que el mensaje se corrompió o algo así
         raise ValueError("Error de canal, no es un codigo valido")
 
     return decoded
 
 
 def bits_to_bytes(bits: str) -> Tuple[bytes, int]:
-    """
-    Esta mierda onvierte un string de bits '0' y '1' en bytes
-    Esto es opcional xd, gpt me dijo que lo añada
-    """
+    # Convierte bits a bytes para una transmisión eficiente
     if not bits:
         return b"", 0
 
@@ -126,22 +105,9 @@ def bits_to_bytes(bits: str) -> Tuple[bytes, int]:
 
 
 def bytes_to_bits(data: bytes, padding: int) -> str:
-    """
-    Hace lo mismo que el de arriba pero al revez, misma historia de pq no se usa
-    """
+    # Convierte de bytes a bits 
 
     bits = "".join(f"{byte:08b}" for byte in data)
     if padding:
         bits = bits[:-padding]
     return bits
-
-
-if __name__ == "__main__":
-    # Pequeña prueba local
-    msg = list("WENASSSSS COMOTA?")
-    codebook = train_codebook(msg)
-    bits = encode(msg, codebook)
-    rec = decode(bits, codebook)
-    print("Mensaje original:", "".join(msg))
-    print("Bits:", bits)
-    print("Reconstruido:", "".join(rec))

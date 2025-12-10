@@ -1,14 +1,7 @@
 import random
 import numpy as np
 
-
 class Hamming:
-    """
-    Implementation of Hamming code.
-    Encodes K bits of data into N bits.
-    Can correct 1 bit error.
-    """
-
     def __init__(self, k: int = 4, n: int = 7):
         self.n = n
         self.k = k
@@ -24,22 +17,17 @@ class Hamming:
         self.syndrome_map = self._build_syndrome_map()
         self.data_length = 0
 
-
+    # Verifica que n > k
     def _check_valid_parameters(self, n, k):
-        assert n > k, "n debe ser mayor a k"
+        assert n > k
 
     def _check_valid_G_H(self):
-        """"
-        Verifica que las matrices G y H sean válidas para el código Hamming(n,k).
-        """
-        # Verificar G * H^T = 0
+        # Verifica que las matrices G y H sean válidas para el código Hamming(n,k).
         product = np.dot(self.G, self.H.T) % 2
-        assert np.all(product == 0), "G * H^T is not zero matrix"
+        assert np.all(product == 0)
 
     def _get_non_zero_vectors(self, I_m: np.ndarray):
         """
-        Genera todos los vectores columna binarios de longitud m, excepto el vector cero y los pertenecientes a la matriz identidad de tamaño m.
-        
         Parametros:
         I_m (np.ndarray): Matriz identidad de tamaño m x m.
 
@@ -47,18 +35,15 @@ class Hamming:
         all_vectors: Lista de vectores columna binarios de longitud m.
         """
         all_vectors = []
-        # Iterar desde 1 hasta 2^m - 1
         for i in range(1, 2**self.m):
             # Convertir el número (i) a su representación binaria de m bits
             vector = []
             temp = i
             for _ in range(self.m):
-                # Obtener el bit menos significativo
                 vector.insert(0, temp % 2)
                 temp //= 2
             if not vector in I_m.tolist():
                 all_vectors.append(vector)
-        # Retorna una lista de listas (vectores)
         return np.array(all_vectors)
 
     def _build_H(self):
@@ -113,9 +98,6 @@ class Hamming:
         """
         Codifica un array de strings binarios que representan bits de datos.
         Cálcula c = d * G 
-
-        Parametros:
-        data_bits (list or np.ndarray): Lista o array de bits de datos (0s y 1s).
         """
         self.data_length = len(data_bits)
         data = self._apply_padding(data_bits)
@@ -134,12 +116,6 @@ class Hamming:
         """
         Descodifica y corrige un array de strings binarios que representan bits recibidos.
         Cálcula el síndrome z = H * r^T y corrige errores si es necesario.
-
-        Parametros:
-        received_bits (list or np.ndarray): Lista o array de bits recibidos (0s y 1s).
-        Retorna:
-        decoded_bits (np.ndarray): Bits decodificados y corregidos.
-        corrected_errors (int): Número de errores corregidos.
         """
         received = np.array(received_bits)
         if len(received) % self.n != 0:
