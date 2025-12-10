@@ -8,6 +8,12 @@ import numpy as np
 from Codificacion_Hamming import Hamming
 from Codificacion_Huffman import decode as huf_decode
 from Filtrado import calculate_entropy, voltage_to_adc, adc_to_voltage, ADC_RESOLUTION_BITS
+from queue import Queue
+
+RECV_Q = Queue(maxsize=50)
+
+def get_recv_queue():
+    return RECV_Q
 
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -21,7 +27,7 @@ HAMMING_N = 7
 async def receive_message():
     """Se conecta al servidor EMISOR, recibe los datos codificados y los decodifica."""
 
-    uri = "ws://localhost:8765"
+    uri = "ws://localhost:8766"
     
     # Inicializar la instancia de Hamming para la decodificación
     hamming = Hamming(k=HAMMING_K, n=HAMMING_N)
@@ -96,6 +102,21 @@ async def receive_message():
                 except ValueError as e:
                     logging.error(f"Error durante la decodificación Huffman: {e}. Puede ser un error de canal no corregido.")
                     continue
+
+                # ----------------------------------
+                # REPORTE PARA VISUALIZACIÓN
+                # ----------------------------------
+                try:
+                    received_volt = adc_to_voltage(recovered_adc_array)
+
+                    RECV_Q.put_nowait({
+                        "recovered_adc": recovered_adc_array.tolist(),
+                        "received_volt": received_volt.tolist(),
+                        "corrected_errors": corrected_errors
+                    })
+                except Exception:
+                    pass
+
                 
                 # ------------------------------
                 # 4. RESULTADOS Y ANÁLISIS
@@ -116,7 +137,7 @@ async def receive_message():
     except websockets.exceptions.ConnectionClosedOK:
         logging.info("Conexión cerrada por el EMISOR.")
     except ConnectionRefusedError:
-        logging.error("No se pudo conectar. Asegúrate de que el servidor EMISOR esté en ejecución en ws://localhost:8765.")
+        logging.error("No se pudo conectar. Asegúrate de que el servidor EMISOR esté en ejecución en ws://localhost:8766.")
     except Exception as e:
         logging.error(f"Error inesperado en RECEPTOR: {e}", exc_info=True)
 

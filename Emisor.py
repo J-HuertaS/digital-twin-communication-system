@@ -9,14 +9,20 @@ import serial
 from Codificacion_Hamming import Hamming
 from Codificacion_Huffman import train_codebook
 from Codificacion_Huffman import encode as huf_encode
-from Codificacion_Huffman import bits_to_bytes, bytes_to_bits # No se usan, pero se mantienen
+from Codificacion_Huffman import bits_to_bytes, bytes_to_bits
 from Filtrado import apply_moving_average_filter, adc_to_voltage, voltage_to_adc, calculate_entropy
+from queue import Queue
+
+EMIT_Q = Queue(maxsize=50)
+
+def get_emit_queue():
+    return EMIT_Q
 
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Configuración de E/S y Procesamiento
-USE_ARDUINO = False        # ← CAMBIA ESTO A True PARA LEER DEL ARDUINO
+USE_ARDUINO = False        # ← CAMBIAR ESTO A True PARA LEER DEL ARDUINO
 ARDUINO_PORT = "COM3"
 ARDUINO_BAUD = 9600
 
@@ -43,7 +49,6 @@ async def handle_connection(websocket):
             logging.info(f"Arduino conectado en {ARDUINO_PORT}")
         except Exception as e:
             logging.error(f"No se pudo abrir el puerto Arduino: {e}")
-            # Si no se puede abrir el puerto, se retorna (o se cambia a simulación)
             return
 
     try:
@@ -63,8 +68,15 @@ async def handle_connection(websocket):
                     continue
             else:
                 # Datos simulados
-                await asyncio.sleep(1 / 50)
-                value = random.randint(0, 1023)
+                await asyncio.sleep(1 / 200)
+                t = getattr(handle_connection, "_t", 0)
+                handle_connection._t = t + 1
+
+                base = 520
+                slow = 90 * np.sin(2 * np.pi * 0.02 * t)
+                noise = np.random.normal(0, 8)
+                value = int(np.clip(base + slow + noise, 0, 3000))
+
             
             if value is None:
                 continue
@@ -99,10 +111,25 @@ async def handle_connection(websocket):
             # mode='valid' resulta en len(data) - window + 1
             logging.info(f"Bloque filtrado ADC ({len(filtered_adc)} samples): {filtered_adc.tolist()}")
 
+            # ----------------------------------
+            # REPORTE PARA VISUALIZACIÓN
+            # ----------------------------------
+            try:
+                # Esta es la señal que realmente se transmite como símbolos
+                emitted_volt = adc_to_voltage(filtered_adc)
+
+                EMIT_Q.put_nowait({
+                    "filtered_adc": filtered_adc.tolist(),
+                    "emitted_volt": emitted_volt.tolist()
+                })
+            except Exception:
+                pass
+
             # ------------------------------
             # CODIFICACIÓN DE HUFFMAN
             # ------------------------------
-            
+
+
             # Los símbolos para Huffman deben ser los valores ADC discretos (enteros)
             # El script original convertía a str(filtered_adc.tolist()), lo cual
             # codificaba los caracteres de la representación de la lista, NO los valores ADC.
@@ -165,9 +192,9 @@ async def main():
         async with websockets.serve(
             handle_connection,
             "localhost",
-            8765
+            8766
         ):
-            logging.info("Servidor EMISOR listo en ws://localhost:8765")
+            logging.info("Servidor EMISOR listo en ws://localhost:8766")
             await asyncio.Future()  # Mantener vivo
     except Exception as e:
         logging.error(f"Error al iniciar el servidor: {e}")
