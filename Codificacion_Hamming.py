@@ -112,10 +112,15 @@ class Hamming:
             encoded_bits.extend(encoded_block)
         return np.array(encoded_bits, dtype=int)
 
-    def decode(self, received_bits):
+    def decode(self, received_bits, data_length: int = None):
         """
         Descodifica y corrige un array de strings binarios que representan bits recibidos.
         Cálcula el síndrome z = H * r^T y corrige errores si es necesario.
+
+        Parámetros:
+        received_bits: lista/array de bits recibidos (0/1)
+        data_length: (opcional) longitud original de los bits de datos antes del padding.
+                     Si se proporciona, se usará para recortar el padding al final.
         """
         received = np.array(received_bits)
         if len(received) % self.n != 0:
@@ -126,7 +131,7 @@ class Hamming:
         corrected_errors = 0
 
         for i in range(n_blocks):
-            block = received[i * self.n : (i + 1) * self.n]
+            block = received[i * self.n : (i + 1) * self.n].copy()
 
             # Calculate syndrome: z = H * r^T
             syndrome = np.dot(self.H, block) % 2
@@ -142,6 +147,7 @@ class Hamming:
 
             decoded_block = block[0:self.k]
             decoded_bits.extend(decoded_block)
-        # Deshacer el padding
-        restored_data = decoded_bits[: self.data_length]
+        # Deshacer el padding: usar data_length si fue proporcionado, si no usar self.data_length
+        length_to_restore = data_length if data_length is not None else self.data_length
+        restored_data = decoded_bits[: length_to_restore]
         return np.array(restored_data, dtype=int), corrected_errors

@@ -1,121 +1,125 @@
-# receptor.py
 import asyncio
-import logging
 import json
-import base64
-from typing import List
-
-import numpy as np
+import logging
 import websockets
+import numpy as np
 
+# Importación de módulos de codificación y filtrado
 from Codificacion_Hamming import Hamming
-from Codificacion_Huffman import decode as huffman_decode
+from Codificacion_Huffman import decode as huf_decode
+from Filtrado import calculate_entropy, voltage_to_adc, adc_to_voltage, ADC_RESOLUTION_BITS
 
-# CONFIG
-LISTEN_HOST = "0.0.0.0"
-LISTEN_PORT = 8765
-
-# Logging
+# Configuración de Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("receptor")
 
-def packed_bytes_to_bits_list(b: bytes, padding: int) -> List[int]:
-    if not b:
-        return []
-    bits = "".join(f"{byte:08b}" for byte in b)
-    if padding:
-        bits = bits[:-padding]
-    return [int(ch) for ch in bits]
+# Parámetros del sistema
+# Hamming(7,4) es usado por el Emisor
+HAMMING_K = 4
+HAMMING_N = 7
 
-async def handle_connection(websocket, path):
-    logger.info(f"Conexión entrante: {websocket.remote_address}")
+
+async def receive_message():
+    """Se conecta al servidor EMISOR, recibe los datos codificados y los decodifica."""
+
+    uri = "ws://localhost:8765"
+    
+    # Inicializar la instancia de Hamming para la decodificación
+    hamming = Hamming(k=HAMMING_K, n=HAMMING_N)
+
     try:
-        async for message in websocket:
-            logger.info("Mensaje recibido por websocket (raw).")
-            try:
-                payload = json.loads(message)
-            except Exception as e:
-                logger.error(f"JSON inválido: {e}")
-                await websocket.send("ERR: invalid json")
-                continue
+        logging.info(f"Intentando conectar a {uri}...")
+        async with websockets.connect(uri) as websocket:
+            logging.info("Conexión establecida con el EMISOR.")
 
-            # Validar tipo
-            if payload.get("type") != "block":
-                logger.warning("Mensaje desconocido (no 'block'). Ignorando.")
-                await websocket.send("IGNORED")
-                continue
+            while True:
+                # ------------------------------
+                # 1. RECEPCIÓN DE DATOS
+                # ------------------------------
+                
+                message_json = await websocket.recv()
+                message = json.loads(message_json)
+                
+                # Extraer componentes del mensaje
+                entropy_sent = message.get("entropy")
+                codebook = message.get("codebook")
+                hamming_encoded_list = message.get("hamming")
 
-            logger.info(f"--- Procesando bloque recibido ---")
-            logger.info(f"Bloque original (reportado por emisor): {payload.get('original_block')}")
-            logger.info(f"Entropy (reportado): {payload.get('entropy')}")
+                if not codebook or not hamming_encoded_list:
+                    logging.warning("Mensaje incompleto o inválido recibido. Ignorando.")
+                    continue
 
-            # Obtener parámetros y datos
-            codebook = payload["huffman_codebook"]
-            hamming_k = payload["hamming_k"]
-            hamming_n = payload["hamming_n"]
-            hamming_data_length = payload["hamming_data_length"]
-            hamming_b64 = payload["hamming_bits_base64"]
-            hamming_padding = payload["hamming_bytes_padding"]
+                logging.info(f"Mensaje recibido. Entropía reportada: {entropy_sent:.4f}")
+                logging.info(f"Tamaño de datos Hamming: {len(hamming_encoded_list)} bits")
+                logging.info(f"Diccionario de Huffman recibido: {codebook}")
+                
+                # Convertir los bits de Hamming de lista a array numpy
+                received_hamming_bits = np.array(hamming_encoded_list, dtype=int)
+                
+                # ------------------------------
+                # 2. DECODIFICACIÓN Y CORRECCIÓN HAMMING
+                # ------------------------------
+                
+                logging.info("Iniciando decodificación Hamming (Corrección de Errores)...")
+                
+                # Decodificar Hamming: devuelve los bits de Huffman y el número de errores corregidos
+                huffman_bits_corrected_array, corrected_errors = hamming.decode(
+                    received_hamming_bits, data_length=message.get("huffman_length")
+                )
+                
+                # Convertir a cadena de bits para Huffman
+                huffman_bits_corrected_str = "".join(map(str, huffman_bits_corrected_array.tolist()))
 
-            # Decodificar base64 -> bytes -> lista de bits
-            try:
-                hb = base64.b64decode(hamming_b64.encode())
-            except Exception as e:
-                logger.error(f"Error decodificando base64: {e}")
-                await websocket.send("ERR: base64")
-                continue
-            hamming_bits_list = packed_bytes_to_bits_list(hb, hamming_padding)
-            logger.info(f"Bits hamming recibidos (desempaquetados) len={len(hamming_bits_list)}")
+                logging.info(f"Errores corregidos por Hamming: {corrected_errors}")
+                logging.info(f"Bits Huffman corregidos (longitud {len(huffman_bits_corrected_str)}): {huffman_bits_corrected_str}...")
 
-            # Crear instancia Hamming igual al emisor
-            h = Hamming(k=hamming_k, n=hamming_n)
-            # IMPORTANTE: setear data_length al valor transmitido por el emisor
-            h.data_length = hamming_data_length
-
-            # Decodificar y corregir errores (si existieran)
-            try:
-                decoded_bits_array, corrected = h.decode(hamming_bits_list)
-                decoded_bits_list = decoded_bits_array.tolist()
-            except Exception as e:
-                logger.exception(f"Error decodificando Hamming: {e}")
-                await websocket.send("ERR: hamming decode")
-                continue
-
-            logger.info(f"Hamming decode: errores corregidos = {corrected}")
-            logger.info(f"Bits Huffman restaurados (len={len(decoded_bits_list)}): {decoded_bits_list[:160]}{'...' if len(decoded_bits_list)>160 else ''}")
-
-            # Convertir bits a string y usar Huffman decode
-            bits_string = "".join(str(b) for b in decoded_bits_list)
-            logger.info(f"Bits string para Huffman: {bits_string[:160]}{'...' if len(bits_string)>160 else ''}")
-
-            try:
-                decoded_symbols = huffman_decode(bits_string, codebook)
-            except Exception as e:
-                logger.exception(f"Error decodificando Huffman: {e}")
-                await websocket.send("ERR: huffman decode")
-                continue
-
-            logger.info(f"Mensaje final decodificado (símbolos): {decoded_symbols}")
-            # opcional: devolver ACK con resumen
-            ack = {
-                "status": "ok",
-                "corrected_errors": corrected,
-                "decoded_length": len(decoded_symbols)
-            }
-            await websocket.send(json.dumps(ack))
-
-    except websockets.ConnectionClosed:
-        logger.info("Conexión cerrada por el cliente.")
+                # ------------------------------
+                # 3. DECODIFICACIÓN HUFFMAN
+                # ------------------------------
+                
+                logging.info("Iniciando decodificación Huffman (Descompresión)...")
+                
+                # Se necesita invertir el diccionario para que las claves sean strings binarias
+                # La función huf_decode del módulo Codificacion_Huffman.py ya maneja la inversión.
+                
+                # Los símbolos decodificados serán enteros (valores ADC discretos)
+                try:
+                    # El codebook recibido tiene claves de string (ej. '400') debido a json.dumps.
+                    # Debemos convertir las claves de vuelta a enteros antes de pasarlas
+                    # a la función huf_decode, ya que el EMISOR usó enteros como símbolos.
+                    codebook_int = {int(k): v for k, v in codebook.items()}
+                    
+                    decoded_adc_values = huf_decode(huffman_bits_corrected_str, codebook_int)
+                    
+                    # Convertir la lista de símbolos (enteros) a un array de numpy
+                    recovered_adc_array = np.array(decoded_adc_values, dtype=int)
+                    
+                except ValueError as e:
+                    logging.error(f"Error durante la decodificación Huffman: {e}. Puede ser un error de canal no corregido.")
+                    continue
+                
+                # ------------------------------
+                # 4. RESULTADOS Y ANÁLISIS
+                # ------------------------------
+                
+                logging.info(f"Datos ADC recuperados ({len(recovered_adc_array)} samples): {recovered_adc_array.tolist()}")
+                
+                # Calcular la entropía de los datos recuperados para comparación
+                entropy_recovered = calculate_entropy(recovered_adc_array)
+                
+                # Mostrar el resultado final
+                logging.info("--- Resumen del Bloque ---")
+                logging.info(f"Entropía reportada (Emisor): {entropy_sent:.4f}")
+                logging.info(f"Entropía de datos recuperados: {entropy_recovered:.4f}")
+                logging.info(f"Número de errores corregidos por Hamming: {corrected_errors}")
+                logging.info("--------------------------\n")
+                
+    except websockets.exceptions.ConnectionClosedOK:
+        logging.info("Conexión cerrada por el EMISOR.")
+    except ConnectionRefusedError:
+        logging.error("No se pudo conectar. Asegúrate de que el servidor EMISOR esté en ejecución en ws://localhost:8765.")
     except Exception as e:
-        logger.exception(f"Error en handle_connection: {e}")
+        logging.error(f"Error inesperado en RECEPTOR: {e}", exc_info=True)
 
-async def main():
-    server = await websockets.serve(handle_connection, LISTEN_HOST, LISTEN_PORT)
-    logger.info(f"Servidor WebSocket escuchando en ws://{LISTEN_HOST}:{LISTEN_PORT}")
-    await server.wait_closed()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Receptor detenido por usuario.")
+    asyncio.run(receive_message())
